@@ -1,0 +1,25 @@
+@import url('https://fonts.googleapis.com/css?family=Roboto+Mono');
+input.led-rule {
+  font-family: "Roboto mono", monospace;
+  font-size:17pt;
+  background-color:#111119;
+  color:red;
+  height:50px;
+}
+
+span.status-ready {
+  color:green;
+}
+
+span.status-updating {
+  color:orange;
+}
+
+span.status-error {
+  color:red;
+}
+
+input.led-rule {
+ margin:auto;
+ display:block;
+}
