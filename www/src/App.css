@@ -19,7 +19,7 @@ span.status-error {
   color:red;
 }
 
-input.led-rule {
- margin:auto;
- display:block;
+div.led-screen {
+  margin:auto;
+  display:table;
 }

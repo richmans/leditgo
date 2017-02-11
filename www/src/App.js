@@ -18,7 +18,7 @@ class LedRule extends Component {
   }
   
   render() {
-    var width = this.props.width * 16;
+    var width = this.props.width * 14 + 26;
     var style = {width: width};
     return (
       <input onChange={this.onChange} value={this.props.text} style={style} className='led-rule form-control'/>
@@ -44,6 +44,36 @@ class LedScreen extends Component {
     this.state = {
       "rules": rules
     }
+    this.updateScreen();
+    this.setLines("last")
+  }
+  
+  setLines(variant) {
+    fetch("/api/" + variant).then(function(response){
+      response.json().then(function(result) {
+        var rules = this.state.rules;
+        var lines = result.results
+        console.log(lines);
+        for(var i=0; i< this.props.ledHeight;i++) {
+          rules[i].text = lines[i]
+        }
+        this.updateScreen();
+      }.bind(this))
+    }.bind(this))
+  }
+  updateScreen() {
+    var rules = [];
+    for(var i=0; i< this.props.ledHeight;i++) {
+      var line = this.state.rules[i].text;
+      var diff = this.props.ledWidth - line.length
+      if (diff > 0) {
+        line += " ".repeat(diff);
+      } else if (diff < 0) {
+        line = line.substr(0, this.props.ledWidth)
+      }
+      rules.push(line)
+    }
+    this.props.onUpdate(rules)
   }
   
   onUpdateRule(key, text) {
@@ -56,8 +86,11 @@ class LedScreen extends Component {
             }
           }
         }
-      }))
+      }), function() {
+        this.updateScreen();
+      }.bind(this))
     }
+    
   }
   
   render() {
@@ -72,6 +105,7 @@ class LedScreen extends Component {
     }.bind(this));
     return (
       <div className="led-screen">
+        <Button bsStyle='link' onClick={this.setLines.bind(this,"default")}>Default</Button>
         {rules}
       </div>
     )
@@ -92,23 +126,31 @@ class App extends Component {
   constructor(props) {
     super(props);
     this.onUpdate = this.onUpdate.bind(this);
+    this.onLedUpdate = this.onLedUpdate.bind(this);
   }
   componentWillMount() {
-    this.state={status: "ready"}
+    this.state={status: "ready", rules: []}
+  }
+  
+  onLedUpdate(rules) {
+    this.setState({rules: rules});
   }
   
   onUpdate() {
     this.setState({status: "updating"})
-    fetch("/api/screen", {method: "POST"}).then(function(response){
-      if(response.ok) {
-        return response.text();
-      } else {
-        throw new Error('Network response was not ok.');
-      }
-    }).then(function(response) {
-      this.setState({status: "ready"});
-    }.bind(this)).catch(function(error) {
-      this.setState({status: "error"});
+    var body =  JSON.stringify(this.state.rules);
+    fetch("/api/screen", {method: "POST", body: body, headers: new Headers({
+		'Content-Type': 'application/json'
+	})}).then(function(response){
+      response.text().then(function(responseText) {
+        console.log(responseText, response.ok);
+        if(response.ok) {
+          this.setState({status: "ready", error: ""});
+        }else{
+          console.log({status: "error", error: responseText})
+          this.setState({status: "error", error: responseText});
+        }
+      }.bind(this))
     }.bind(this))
   }
   
@@ -124,13 +166,17 @@ class App extends Component {
           </Navbar.Header>
           <Navbar.Text>
             <StatusIndicator indicator={this.state.status}/>
+           
+          </Navbar.Text>
+          <Navbar.Text>
+           {this.state.error}
           </Navbar.Text>
           <Navbar.Form pullRight>
-            <Button bsStyle='primary' onClick={this.onUpdate}>Update screen</Button>
+            <Button bsStyle='primary' className={(this.state.status === "ready") ? "": "disabled"} onClick={this.onUpdate}>Update screen</Button>
           </Navbar.Form>
         </Navbar>
         <div className="App-editor">
-          <LedScreen ledHeight='8' ledWidth='20'/>
+          <LedScreen onUpdate={this.onLedUpdate} ledHeight='8' ledWidth='20'/>
         </div>
           
       </div>

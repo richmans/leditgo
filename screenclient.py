@@ -3,7 +3,9 @@ import pip
 import binascii
 import traceback
 import io
+import sys
 
+HOST, PORT = "localhost", 10001
 try:
   from crc16 import crc16xmodem
 except:
@@ -181,7 +183,7 @@ class ScreenPacketBuilder:
     
 class ScreenClient:
   state = 'init'
-  def __init__(self, host, port, screenWidth=20, screenHeight=8):
+  def __init__(self, host=HOST, port=PORT, screenWidth=20, screenHeight=8):
     self.host = host
     self.port = port
     self.builder = ScreenPacketBuilder()
@@ -261,17 +263,24 @@ class ScreenClient:
     if packet.packetType != 'exit-program-ok' or packet.args['result'] != True:
       raise Exception("Exit program mode Failure")
     self.state = "authenticated"
+    
+  def doUpdate(self, text):
+    self.connect()
+    self.login()
+    self.program()
+    self.setText(text)
+    self.exitProgram()
   
 if __name__ == "__main__":
-  HOST, PORT = "localhost", 10001
   text = [a.rstrip('\n') for a in open("default.txt").readlines()]
-  client = ScreenClient(HOST, PORT)
+  if len(sys.argv) > 1:
+    host = sys.argv[1]
+  else:
+    host = HOST
+  print("Using led screen at " + host)
+  client = ScreenClient(host, PORT)
   try: 
-    client.connect()
-    client.login()
-    client.program()
-    client.setText(text)
-    client.exitProgram()
+    client.doUpdate(text)
   except Exception as e:
     print e.message
     traceback.print_exc()
