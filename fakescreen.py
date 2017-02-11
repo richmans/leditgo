@@ -11,6 +11,14 @@ class LedTcpHandler(SocketServer.BaseRequestHandler):
       self.status = "programming"
       response = self.builder.buildPacket("program-ok")
       self.request.send(response)
+    if packet.packetType == 'exit-program':
+      self.status = "loggedin"
+      response = self.builder.buildPacket("exit-program-ok")
+      self.request.send(response)
+    if packet.packetType == "set-text":
+      self.status = "settext"
+      response = self.builder.buildPacket("set-text-ok")
+      self.request.send(response)
       
   def handle(self):
     print "Connection from {}".format(self.client_address[0])
@@ -19,6 +27,7 @@ class LedTcpHandler(SocketServer.BaseRequestHandler):
       data = self.request.recv(1024)
       if not data: break
       packet = screenclient.ScreenPacketParser(0)
+      print("<< " + data)
       packet.parse(data)
       print(packet)
       self.handlePacket(packet)

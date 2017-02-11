@@ -11,20 +11,22 @@ except:
   from crc16 import crc16xmodem
 
 class ScreenPacketParser:
-  def __init__(self, addr=0):
+  def __init__(self, addr=0, screenWidth=20, screenHeight=8):
     self.args = { }
     self.addr = addr
     self.server = addr == 0
+    self.screenWidth = screenWidth
+    self.screenHeight = screenHeight
     
-  def readNumber(self, reader, length=1):
+  def readNumber(self, reader, length=1, base=16):
     self.lastPos = reader.tell()
     data = binascii.unhexlify(reader.read(length * 2))
-    return int(data, 16)
+    return int(data, base)
   
-  def readByte(self, reader, length=2):
+  def readByte(self, reader, length=2, base=16):
     self.lastPos = reader.tell()
     data = reader.read(length)
-    return int(data, 16)
+    return int(data, base)
 
   def readChar(self, reader):
     return chr(self.readByte(reader))
@@ -44,6 +46,18 @@ class ScreenPacketParser:
     
   def parseLogin(self, reader, arglen):
     self.args['password'] = binascii.unhexlify(reader.read(arglen * 2))
+  
+  def parseSetText(self, reader):
+    self.args["program"] = self.readNumber(reader, 2)
+    self.args["page"] = self.readNumber(reader, 2)
+    self.args["appear"] = int(self.readChar(reader))
+    self.args["disappear"] = int(self.readChar(reader))
+    self.args["stay"] = self.readNumber(reader, 2, 10)
+    expectedScreenSize = self.screenHeight * (self.screenWidth + 2)
+    text = binascii.unhexlify(reader.read(2 * expectedScreenSize))
+    if len(text) != expectedScreenSize:
+      raise Exception("Invalid screen size %d, expected %d" % (len(text), expectedScreenSize))
+    self.args['text'] = [text[i+1:i+self.screenWidth+2] for i in range(0,expectedScreenSize, self.screenWidth + 2)]
     
   def parsePacket(self, reader):
     if self.server:
@@ -72,6 +86,20 @@ class ScreenPacketParser:
       self.packetType = 'program-ok'
       result = self.readChar(reader)
       self.args['result'] = result == 'Y'
+    elif cmd == 'H' and self.server:
+      self.packetType = 'exit-program'
+    elif cmd == 'H':
+      self.packetType = 'exit-program-ok'
+      result = self.readChar(reader)
+      self.args['result'] = result == 'Y'
+    elif cmd == 'C' and self.server:
+      self.packetType = 'set-text'
+      self.parseSetText(reader)
+    elif cmd == 'C':
+      self.packetType = 'set-text-ok'
+      result = self.readChar(reader)
+      self.args['result'] = result == 'Y'
+    
     checksum = reader.read(8)
     self.expectByte(reader, 4)
     if not self.server:
@@ -99,6 +127,18 @@ class ScreenPacketBuilder:
     result = hex(number)[2:].upper()
     return binascii.hexlify(result.rjust(length, '0'))
   
+  def buildSetText(self, args):
+    if "text" not in args:
+      raise Exception("Text arg required but not found")
+    msg = "C"
+    msg += "%02X" % 1 # program
+    msg += "%02X" % 1 # page
+    msg += "%01d" % 2 # Appear effect
+    msg += "%01d" % 2 # Disppear effect
+    msg += "%02d" % 5 # Stay seconds
+    msg += "".join([" " + a + " " for a in args["text"]])
+    return msg
+    
   def buildBody(self, packetType, args):
     result = ""
     if packetType == 'login':
@@ -113,6 +153,14 @@ class ScreenPacketBuilder:
       result = "P"
     elif packetType == "program-ok":
       result = "PY"
+    elif packetType == "exit-program":
+      result = "H"
+    elif packetType == "exit-program-ok":
+      result = "HY"
+    elif packetType == "set-text":
+      result = self.buildSetText(args)
+    elif packetType == "set-text-ok":
+      result = "CY"
     else:
       raise Exception("Unknown packet type: " + packetType)
     return result
@@ -128,16 +176,23 @@ class ScreenPacketBuilder:
     if self.src == 0: header = self.serverHeader
     msg = header + binascii.hexlify(msg) + checksum + "04"
     if self.src == 0: msg += "04"
-    print(msg)
+    print(">> " + msg)
     return msg
     
 class ScreenClient:
   state = 'init'
-  def __init__(self, host, port):
+  def __init__(self, host, port, screenWidth=20, screenHeight=8):
     self.host = host
     self.port = port
     self.builder = ScreenPacketBuilder()
-    
+    self.screenWidth = screenWidth
+    self.screenHeight = screenHeight
+  
+  def validateText(self, text):
+    if len(text) != self.screenHeight: return "Height expected %d, found %d" % (len(text), self.screenHeight)
+    for line in text:
+      if len(line) != self.screenWidth: return "Width expected %d, found %d" % (len(line), self.screenWidth)
+    return None
     
   def connect(self):
     self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -171,16 +226,52 @@ class ScreenClient:
     packet.parse(response)
     print(packet)
     if packet.packetType != 'program-ok' or packet.args['result'] != True:
-      raise Exception("Login Failure")
+      raise Exception("Program mode Failure")
     self.state = "program-enabled"
-    
+   
+  def setText(self, text):
+    if self.state != "program-enabled":
+      raise Exception("SetText while not program-enabled")
+    errors = self.validateText(text) 
+    if errors != None:
+      raise Exception("Invalid text size %s" % errors)
+    print("Starting setText")
+    packet = self.builder.buildPacket("set-text",{"text": text})
+    self.sock.send(packet)
+    self.state = "set-text"
+    response = self.sock.recv(1024)
+    packet = ScreenPacketParser(254)
+    packet.parse(response)
+    print(packet)
+    if packet.packetType != 'set-text-ok' or packet.args['result'] != True:
+      raise Exception("SetText Failure")
+    self.state = "program-enabled"
+     
+  def exitProgram(self):
+    if self.state != "program-enabled":
+      raise Exception("Exit Program while not program-enabled")
+    print("Exitting programming mode")
+    packet = self.builder.buildPacket("exit-program")
+    self.sock.send(packet)
+    self.state = "exit-program"
+    response = self.sock.recv(1024)
+    packet = ScreenPacketParser(254)
+    packet.parse(response)
+    print(packet)
+    if packet.packetType != 'exit-program-ok' or packet.args['result'] != True:
+      raise Exception("Exit program mode Failure")
+    self.state = "authenticated"
+  
 if __name__ == "__main__":
   HOST, PORT = "localhost", 10001
+  text = [a.rstrip('\n') for a in open("default.txt").readlines()]
   client = ScreenClient(HOST, PORT)
   try: 
     client.connect()
     client.login()
     client.program()
+    client.setText(text)
+    client.exitProgram()
   except Exception as e:
     print e.message
     traceback.print_exc()
