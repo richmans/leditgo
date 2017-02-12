@@ -15,6 +15,10 @@ class LedTcpHandler(SocketServer.BaseRequestHandler):
       self.status = "loggedin"
       response = self.builder.buildPacket("exit-program-ok")
       self.request.send(response)
+    if packet.packetType == "set-cron":
+      self.status = "setcron"
+      response = self.builder.buildPacket("set-cron-ok")
+      self.request.send(response)
     if packet.packetType == "set-text":
       self.status = "settext"
       response = self.builder.buildPacket("set-text-ok")

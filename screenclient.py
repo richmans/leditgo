@@ -19,23 +19,25 @@ class ScreenPacketParser:
     self.server = addr == 0
     self.screenWidth = screenWidth
     self.screenHeight = screenHeight
+    self.lastPos = 0
+    self.packetType = 'unknown'
     
   def readNumber(self, reader, length=1, base=16):
     self.lastPos = reader.tell()
-    data = binascii.unhexlify(reader.read(length * 2))
+    data = reader.read(length)
     return int(data, base)
   
-  def readByte(self, reader, length=2, base=16):
+  def readByte(self, reader, length=1, base=16):
     self.lastPos = reader.tell()
     data = reader.read(length)
     return int(data, base)
 
   def readChar(self, reader):
-    return chr(self.readByte(reader))
+    return reader.read(1)
             
   def expectByte(self, reader, byte):
     if(type(byte) == int): byte = chr(byte)
-    result = chr(self.readByte(reader))
+    result = reader.read(1)
     if(result != byte): raise(Exception("Unexpected byte %d (expected %d)" % (ord(result), ord(byte))))
 
   def expectNumber(self, reader, number):
@@ -47,7 +49,7 @@ class ScreenPacketParser:
     if (result != ''): raise(Exception("Expected end, read byte %s" % result))
     
   def parseLogin(self, reader, arglen):
-    self.args['password'] = binascii.unhexlify(reader.read(arglen * 2))
+    self.args['password'] = reader.read(arglen)
   
   def parseSetText(self, reader):
     self.args["program"] = self.readNumber(reader, 2)
@@ -56,10 +58,15 @@ class ScreenPacketParser:
     self.args["disappear"] = int(self.readChar(reader))
     self.args["stay"] = self.readNumber(reader, 2, 10)
     expectedScreenSize = self.screenHeight * (self.screenWidth + 2)
-    text = binascii.unhexlify(reader.read(2 * expectedScreenSize))
+    text = reader.read(expectedScreenSize)
     if len(text) != expectedScreenSize:
       raise Exception("Invalid screen size %d, expected %d" % (len(text), expectedScreenSize))
     self.args['text'] = [text[i+1:i+self.screenWidth+2] for i in range(0,expectedScreenSize, self.screenWidth + 2)]
+  
+  def parseSetCron(self, reader):
+    self.args["program"] = self.readNumber(reader, 2)
+    self.args['programName'] = reader.read(8)
+    self.args['cron'] = reader.read(19)
     
   def parsePacket(self, reader):
     if self.server:
@@ -101,8 +108,14 @@ class ScreenPacketParser:
       self.packetType = 'set-text-ok'
       result = self.readChar(reader)
       self.args['result'] = result == 'Y'
-    
-    checksum = reader.read(8)
+    elif cmd == 'A' and self.server:
+      self.packetType = 'set-cron'
+      self.parseSetCron(reader)
+    elif cmd == 'A':
+      self.packetType = 'set-cron-ok'
+      result = self.readChar(reader)
+      self.args['result'] = result == 'Y'
+    checksum = reader.read(4)
     self.expectByte(reader, 4)
     if not self.server:
       self.expectByte(reader, 4)
@@ -117,18 +130,26 @@ class ScreenPacketParser:
       self.parsePacket(reader)
     except Exception as e:
       print("At pos %d: %s" % (self.lastPos, e.message))
+      traceback.print_exc()
   
 class ScreenPacketBuilder:
-  serverHeader = "0F0F03"
-  clientHeader = "151503"
+  serverHeader = "\x0F\x0F\x03"
+  clientHeader = "\x15\x15\x03"
   def __init__(self, src=254, dst=1):
     self.src = src
     self.dst = dst
     
   def numberToHex(self, number, length=2):
     result = hex(number)[2:].upper()
-    return binascii.hexlify(result.rjust(length, '0'))
+    return result.rjust(length, '0')
   
+  def buildSetCron(self, args):
+    msg = "A"
+    msg += "%02X" % 1 # program
+    msg += "Kvdnzaan" # programname
+    msg += "* *       *       0" # cron def
+    return msg
+    
   def buildSetText(self, args):
     if "text" not in args:
       raise Exception("Text arg required but not found")
@@ -159,6 +180,10 @@ class ScreenPacketBuilder:
       result = "H"
     elif packetType == "exit-program-ok":
       result = "HY"
+    elif packetType == "set-cron":
+      result = self.buildSetCron(args)
+    elif packetType == "set-cron-ok":
+      result = "AY"
     elif packetType == "set-text":
       result = self.buildSetText(args)
     elif packetType == "set-text-ok":
@@ -176,8 +201,8 @@ class ScreenPacketBuilder:
     checksum = self.numberToHex(crc16xmodem(msg))
     header = self.clientHeader
     if self.src == 0: header = self.serverHeader
-    msg = header + binascii.hexlify(msg) + checksum + "04"
-    if self.src == 0: msg += "04"
+    msg = header + msg + checksum + "\x04"
+    if self.src == 0: msg += "\x04"
     print(">> " + msg)
     return msg
     
@@ -248,6 +273,21 @@ class ScreenClient:
     if packet.packetType != 'set-text-ok' or packet.args['result'] != True:
       raise Exception("SetText Failure")
     self.state = "program-enabled"
+  
+  def setCron(self):
+    if self.state != "program-enabled":
+      raise Exception("SetCron while not program-enabled")
+    print("Starting setCron")
+    packet = self.builder.buildPacket("set-cron")
+    self.sock.send(packet)
+    self.state = "set-cron"
+    response = self.sock.recv(1024)
+    packet = ScreenPacketParser(254)
+    packet.parse(response)
+    print(packet)
+    if packet.packetType != 'set-cron-ok' or packet.args['result'] != True:
+      raise Exception("SetCron Failure")
+    self.state = "program-enabled"
      
   def exitProgram(self):
     if self.state != "program-enabled":
@@ -268,6 +308,7 @@ class ScreenClient:
     self.connect()
     self.login()
     self.program()
+    self.setCron()
     self.setText(text)
     self.exitProgram()
   
