@@ -2,7 +2,7 @@
   "name": "leditgo",
   "version": "0.1.0",
   "private": true,
-  "proxy": "http://192.168.1.67:5000",
+  "proxy": "http://localhost:5000",
   "devDependencies": {
     "react-scripts": "0.8.5"
   },
